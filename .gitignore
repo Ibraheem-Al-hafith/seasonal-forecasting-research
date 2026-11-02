@@ -10,6 +10,7 @@ build/
 workspace/*
 !workspace/.gitkeep
 my_workspace/
+workspace_quick/*
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
