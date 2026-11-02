@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "forecasting-research"
+version = "1.0.0"
+description = "Experimental framework comparing seasonal forecasting methods on synthetic time series."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "statsmodels>=0.14.2",
+    "pydantic>=2.5",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "rich>=13.7",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+gui = ["gradio>=4.44"]
+dev = ["pytest>=8.0", "ruff>=0.5", "scikit-learn>=1.4", "build>=1.2"]
+
+[project.scripts]
+research = "forecasting_research.cli.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/forecasting_research"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "slow: slower end-to-end tests (deselect with -m 'not slow')",
+]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning", "ignore::statsmodels.tools.sm_exceptions.InterpolationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008", "UP007", "UP045"]

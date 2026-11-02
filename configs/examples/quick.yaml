@@ -1,0 +1,12 @@
+# Small design for a first run (a few minutes): 8 combinations x 2 replications = 16 datasets, 48 evaluations
+experiment:
+  name: quick_demo
+generation:
+  seasonality_types: [additive, multiplicative]
+  seasonal_periods: [4, 12]
+  trends: [none, linear]
+  noise_levels: [medium]
+  dataset_lengths: [100]
+  replications: 2
+workspace:
+  path: ./workspace_quick

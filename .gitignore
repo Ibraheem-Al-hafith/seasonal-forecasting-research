@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+# runtime workspaces must never be committed
+workspace/*
+!workspace/.gitkeep
+my_workspace/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

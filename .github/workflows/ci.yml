@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.10" }
+          - { os: ubuntu-latest, python: "3.11" }
+          - { os: ubuntu-latest, python: "3.12" }
+          - { os: windows-latest, python: "3.11" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install from lockfile (with GUI extra on one job)
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.python }}" = "3.11" ]; then
+            uv sync --frozen --extra dev --extra gui
+          else
+            uv sync --frozen --extra dev
+          fi
+      - name: Lint
+        run: uv run ruff check src tests
+      - name: Unit + integration + system + research-validity tests (fast; never the 1,620-evaluation run)
+        run: uv run pytest -m "not slow"
+      - name: CLI smoke test (installation + a 12-evaluation experiment)
+        shell: bash
+        run: |
+          uv run research --version
+          uv run research -c configs/examples/smoke.yaml -w "${{ runner.temp }}/ws" run --no-progress
+          uv run research -w "${{ runner.temp }}/ws" workspace check
+      - name: GUI import check
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
+        run: uv run python -c "from forecasting_research.gui.app import build_ui; print('gui import ok')"
+
+  build:
+    name: Package build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - name: Install built wheel in a clean environment
+        run: |
+          uv venv /tmp/clean --python 3.11
+          uv pip install --python /tmp/clean/bin/python dist/*.whl
+          /tmp/clean/bin/research --version
