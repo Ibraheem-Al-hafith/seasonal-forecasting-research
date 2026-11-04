@@ -33,6 +33,7 @@ class ProgressTracker:
             self.started_monotonic: float | None = None
             self.ended_monotonic: float | None = None
             self.session_durations: list[float] = []
+            self.first_done: float | None = None  # monotonic time of the first evaluation finished this session
             self.generation = {"done": 0, "total": 0}
             self.log: deque[str] = deque(maxlen=200)
             self._eval_started: dict[str, float] = {}
@@ -71,6 +72,8 @@ class ProgressTracker:
                 t0 = self._eval_started.pop(ev.evaluation_id, None)
                 if t0 is not None:
                     self.session_durations.append(time.monotonic() - t0)
+                    if self.first_done is None:
+                        self.first_done = time.monotonic()
             elif t == E.GENERATION_STARTED:
                 self.generation = {"done": 0, "total": ev.payload.get("total", 0)}
                 self.activity = "Generating datasets"
@@ -103,9 +106,12 @@ class ProgressTracker:
                 end = self.ended_monotonic if self.ended_monotonic is not None else time.monotonic()
                 elapsed = end - self.started_monotonic
             eta = None
-            if len(self.session_durations) >= MIN_SAMPLES_FOR_ETA and self.status == "RUNNING":
-                avg = sum(self.session_durations) / len(self.session_durations)
-                eta = avg * (pending + running)
+            n = len(self.session_durations)
+            if n >= MIN_SAMPLES_FOR_ETA and self.first_done is not None and self.status == "RUNNING":
+                # observed throughput (evaluations / wall-clock second): valid for sequential AND parallel runs
+                span = time.monotonic() - self.first_done
+                if span > 0:
+                    eta = (pending + running) / ((n - 1) / span) if n > 1 else None
             return {
                 "experiment_id": self.experiment_id,
                 "status": self.status,
@@ -116,7 +122,7 @@ class ProgressTracker:
                 "running": running,
                 "pending": pending,
                 "percent": round(percent, 1),
-                "activity": self.activity,
+                "activity": f"{running} evaluations running in parallel" if running > 1 else self.activity,
                 "current": list(self.running.values()),
                 "elapsed_seconds": elapsed,
                 "eta_seconds": eta,

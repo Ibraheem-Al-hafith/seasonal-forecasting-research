@@ -3,14 +3,14 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 from ..domain.contracts import EvaluationTask, TaskOutcome
-from .base import ExecutionStrategy, TaskRunnerFn
+from .base import ExecutionStrategy, TaskExecutor
 
 
 class SequentialStrategy(ExecutionStrategy):
-    """MVP default: one evaluation at a time (predictable memory, simple recovery)."""
+    """One evaluation at a time (predictable memory, easiest debugging)."""
 
     def execute(
-        self, tasks: Sequence[EvaluationTask], runner: TaskRunnerFn, should_stop: Callable[[], bool]
+        self, tasks: Sequence[EvaluationTask], runner: TaskExecutor, should_stop: Callable[[], bool]
     ) -> list[TaskOutcome]:
         outcomes: list[TaskOutcome] = []
         for task in tasks:
@@ -19,8 +19,5 @@ class SequentialStrategy(ExecutionStrategy):
             outcomes.append(runner(task))
         return outcomes
 
-
-def create_strategy(name: str) -> ExecutionStrategy:
-    if name == "sequential":
-        return SequentialStrategy()
-    raise ValueError(f"Unknown execution strategy: {name}")
+    def describe(self) -> str:
+        return "sequential"

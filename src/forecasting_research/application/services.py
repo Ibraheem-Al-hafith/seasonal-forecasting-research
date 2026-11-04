@@ -13,9 +13,9 @@ from typing import Any
 import pandas as pd
 
 from ..analysis import aggregation, comparison, export, plots
-from ..config.schemas import AppConfig
+from ..config.schemas import AppConfig, ExecutionCfg
 from ..domain.exceptions import ConfigError, DataError, UnknownEntityError
-from ..execution.sequential import create_strategy
+from ..execution.factory import create_strategy, import_worker_modules
 from ..experiments.lifecycle import describe_status
 from ..experiments.manager import ExperimentManager
 from ..forecasting.registry import validate_method_names
@@ -46,13 +46,14 @@ class ResearchApp:
         self.bus.subscribe(self.tracker.on_event)
         self.manager = ExperimentManager(
             repo=self.repo, store=self.store, workspace=self.workspace, bus=self.bus,
-            strategy=create_strategy(self.config.execution.strategy))
+            strategy_factory=create_strategy)
         self._thread: threading.Thread | None = None
         self.last_error: str | None = None
 
     # ---- configuration -------------------------------------------------------------------
     def _cfg(self, cfg: AppConfig | None) -> AppConfig:
         cfg = cfg or self.config
+        import_worker_modules(cfg.execution.worker_modules)  # custom methods must be registered first
         validate_method_names(cfg.forecasting.methods)
         return cfg
 
@@ -90,9 +91,16 @@ class ResearchApp:
             raise DataError("No datasets match the selection. Generate datasets first (research generate).")
         return self.manager.run_on_datasets(cfg, ids, batch_id=batch_id)
 
-    def resume(self, experiment_id: str, retry_failed: bool = False, retry_categories: list[str] | None = None) -> str:
-        """Mode D: resume an interrupted experiment."""
-        return self.manager.resume(experiment_id, retry_failed, set(retry_categories) if retry_categories else None)
+    def resume(self, experiment_id: str, retry_failed: bool = False, retry_categories: list[str] | None = None,
+               execution: ExecutionCfg | None = None) -> str:
+        """Mode D: resume an interrupted experiment.
+
+        Execution settings (sequential/parallel, workers) come from the CURRENTLY loaded configuration unless
+        `execution` is given, so an experiment started sequentially can be resumed in parallel and vice versa.
+        """
+        execution = execution or self.config.execution
+        import_worker_modules(execution.worker_modules)
+        return self.manager.resume(experiment_id, retry_failed, set(retry_categories) if retry_categories else None, execution)
 
     def stop(self) -> None:
         self.manager.request_stop()

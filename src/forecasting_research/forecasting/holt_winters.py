@@ -35,7 +35,7 @@ class HoltWintersForecaster(Forecaster):
         best = None
         tried: list[dict] = []
         for trend_opt in self.cfg.trend_options:
-            trend = None if trend_opt == "none" else "add"
+            trend = None if trend_opt == "none" else trend_opt
             try:
                 model = ExponentialSmoothing(
                     y,

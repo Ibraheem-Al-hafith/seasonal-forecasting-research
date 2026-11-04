@@ -22,7 +22,7 @@ def series(m=4, n=80, form="additive", trend=0.3, seed=0, noise=0.5):
 
 
 def test_registry():
-    assert registry.available_methods() == METHODS
+    assert set(METHODS) <= set(registry.available_methods())  # tests may register extra methods
     with pytest.raises(ConfigError):
         registry.create_method("nope", CFG)
     with pytest.raises(ConfigError):

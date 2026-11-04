@@ -11,6 +11,7 @@ workspace/*
 !workspace/.gitkeep
 my_workspace/
 workspace_quick/*
+*workspace*/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

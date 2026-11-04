@@ -123,7 +123,7 @@ class SarimaCfg(_Strict):
 
 
 class HoltWintersCfg(_Strict):
-    trend_options: list[Literal["none", "add"]] = Field(default_factory=lambda: ["none", "add"])
+    trend_options: list[Literal["none", "add", "mul"]] = Field(default_factory=lambda: ["none", "add", "mul"])
     selection_criterion: Literal["aicc"] = "aicc"
 
     @field_validator("trend_options")
@@ -144,7 +144,22 @@ class ForecastingCfg(_Strict):
 
 
 class ExecutionCfg(_Strict):
-    strategy: Literal["sequential"] = "sequential"
+    """How independent evaluations are executed. Machine-specific: does not affect scientific results."""
+
+    strategy: Literal["sequential", "parallel"] = "sequential"
+    workers: int | Literal["auto"] = "auto"  # auto = CPU cores - 1 (capped at 8); or an integer >= 1
+    start_method: Literal["spawn", "forkserver", "fork"] | None = None  # None -> "spawn" (safe everywhere)
+    worker_modules: list[str] = Field(default_factory=list)  # imported in every worker (custom methods)
+    max_tasks_per_worker: int | None = Field(None, ge=1)  # recycle workers (Python >= 3.11, not with fork)
+    limit_blas_threads: bool = True  # 1 BLAS thread per worker: avoids CPU oversubscription
+    max_worker_restarts: int = Field(3, ge=0, le=100)  # pool rebuilds after crashed workers
+
+    @field_validator("workers")
+    @classmethod
+    def _workers(cls, v: int | str) -> int | str:
+        if isinstance(v, int) and not isinstance(v, bool) and v < 1:
+            raise ValueError("workers must be >= 1 or 'auto'")
+        return v
 
 
 class WorkspaceCfg(_Strict):

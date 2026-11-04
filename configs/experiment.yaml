@@ -1,0 +1,51 @@
+# Full experimental design from the blueprint:
+#   2 seasonality x 3 periods x 2 trends x 3 noise x 3 lengths = 108 combinations
+#   x 5 replications = 540 datasets;  x 3 methods = 1,620 evaluations
+experiment:
+  name: seasonal_forecasting_comparison
+  description: Compare forecasting methods under controlled conditions
+
+generation:
+  seasonality_types: [additive, multiplicative]
+  seasonal_periods: [24, 7, 30, 3]
+  trends: [none, linear]
+  noise_levels: [low, medium, high]
+  dataset_lengths: [150, 200, 500]
+  replications: 5
+  base_seed: 42
+  params:                       # exact generator mathematics (recorded in every dataset's metadata)
+    base_level: 100.0
+    trend_slope: 0.3            # linear trend: base + slope * t
+    additive_amplitude: 15.0    # additive seasonal component = A * p(t),  max|p| = 1
+    multiplicative_amplitude: 0.15   # multiplicative seasonal factor = 1 + a * p(t)
+    harmonic2_amplitude: 0.4
+    noise_sigma: {low: 0.02, medium: 0.05, high: 0.10}   # relative to base level / factor
+    multiplicative_noise_clip: 0.5                        # keeps noise factor strictly positive
+
+evaluation:
+  train_fraction: 0.8
+  forecast_horizon: null        # null -> one complete seasonal cycle
+  seasonal_mode: matched        # matched | additive | multiplicative (deliberate mis-specification)
+
+forecasting:
+  methods: [classical_decomposition, holt_winters, sarima]
+  holt_winters:
+    trend_options: [none, add, mul]  # chosen by AICc on training data only
+  sarima:
+    max_pq_sum: 2               # p + q <= 2  -> 6 options
+    max_seasonal_pq_sum: 2      # P + Q <= 1  -> 3 options  => 18 candidates
+    selection_criterion: aic
+    max_iterations: 100
+    time_budget_seconds: 300
+    seasonal_strength_threshold: 0.64
+    kpss_alpha: 0.05
+    log_transform_multiplicative: false
+
+execution:
+  strategy: sequential
+
+workspace:
+  path: ./workspace
+
+logging:
+  level: INFO

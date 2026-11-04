@@ -1,0 +1,18 @@
+# Same small design as quick.yaml, executed in parallel. Override the worker count from the CLI with -j:
+#   research -c configs/examples/parallel.yaml run            # uses `workers` below
+#   research -c configs/examples/parallel.yaml run -j 1       # force sequential
+#   research -c configs/examples/parallel.yaml run -j 0       # automatic worker count
+experiment:
+  name: parallel_demo
+generation:
+  seasonality_types: [additive, multiplicative]
+  seasonal_periods: [4, 12]
+  trends: [none, linear]
+  noise_levels: [medium]
+  dataset_lengths: [100]
+  replications: 2
+execution:
+  strategy: parallel
+  workers: auto
+workspace:
+  path: ./workspace_parallel

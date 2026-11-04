@@ -42,7 +42,13 @@ forecasting:
     log_transform_multiplicative: false
 
 execution:
-  strategy: sequential
+  strategy: parallel            # sequential | parallel
+  workers: auto                 # auto = CPU cores - 1 (max 8), or an integer >= 1.  ~215 MB RAM per worker
+  # start_method: spawn         # spawn (default, safe on Linux/Windows/macOS) | forkserver | fork
+  # worker_modules: []          # modules registering custom forecasting methods; imported in every worker
+  # max_tasks_per_worker: null  # recycle workers after N evaluations (Python 3.11+); null = never
+  # limit_blas_threads: true    # 1 BLAS thread per worker (avoids CPU oversubscription)
+  # max_worker_restarts: 3      # pool rebuilds tolerated after crashed workers
 
 workspace:
   path: ./workspace

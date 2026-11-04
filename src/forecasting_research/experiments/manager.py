@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from ..config.loader import config_from_dict
-from ..config.schemas import AppConfig
+from ..config.schemas import AppConfig, ExecutionCfg
 from ..domain.contracts import DatasetRecord, ProgressEvent, utcnow
 from ..domain.enums import ExperimentOutcome, ExperimentStatus
 from ..domain.exceptions import ArtifactIntegrityError, DataError, PersistenceError, StopRequested
@@ -33,8 +34,11 @@ log = logging.getLogger(__name__)
 
 
 class ExperimentManager:
-    def __init__(self, *, repo: Repository, store: ArtifactStore, workspace: Path, bus: EventBus, strategy: ExecutionStrategy):
-        self.repo, self.store, self.workspace, self.bus, self.strategy = repo, store, Path(workspace), bus, strategy
+    def __init__(self, *, repo: Repository, store: ArtifactStore, workspace: Path, bus: EventBus,
+                 strategy_factory: Callable[[ExecutionCfg], ExecutionStrategy]):
+        # The strategy is chosen per run from that run's execution settings (sequential / parallel).
+        self.repo, self.store, self.workspace, self.bus = repo, store, Path(workspace), bus
+        self.strategy_factory = strategy_factory
         self.stop_event = threading.Event()
         bus.subscribe(self._persist_event)
 
@@ -120,9 +124,13 @@ class ExperimentManager:
         return experiment_id
 
     # ---- Mode D: resume ------------------------------------------------------------------
-    def resume(self, experiment_id: str, retry_failed: bool = False, retry_categories: set[str] | None = None) -> str:
+    def resume(self, experiment_id: str, retry_failed: bool = False, retry_categories: set[str] | None = None,
+               execution: ExecutionCfg | None = None) -> str:
+        """`execution` overrides the stored execution settings (they are machine-specific, not scientific)."""
         exp = self.repo.experiments.get(experiment_id)
         cfg = config_from_dict(exp["config"])
+        if execution is not None:
+            cfg = cfg.model_copy(update={"execution": execution})
         validate_method_names(cfg.forecasting.methods)
         plan = plan_resume(self.repo, self.store, experiment_id, retry_failed, retry_categories)
         log.info("resume plan: %d to run, %d skipped, %d invalid-completed, %d retried-failed, %d permanent failures",
@@ -139,16 +147,18 @@ class ExperimentManager:
             rows = self.repo.evaluations.list_for_experiment(experiment_id)
             done = sum(1 for r in rows if r["status"] == "COMPLETED" and r["evaluation_id"] not in run_ids)
             failed = sum(1 for r in rows if r["status"] == "FAILED" and r["evaluation_id"] not in run_ids)
+            strategy = self.strategy_factory(cfg.execution)
             self.repo.experiments.set_status(experiment_id, ExperimentStatus.RUNNING.value, ExperimentOutcome.NONE.value, mark_started=True)
             self.bus.publish(ProgressEvent(E.EXPERIMENT_STARTED, experiment_id=experiment_id,
-                                           message=f"{'Resumed' if resumed else 'Started'} {experiment_id}: {len(tasks)} evaluations to run"))
+                                           message=f"{'Resumed' if resumed else 'Started'} {experiment_id}: {len(tasks)} evaluations to run "
+                                                   f"[{strategy.describe()}]"))
             self.bus.publish(ProgressEvent(E.PLAN_BUILT, experiment_id=experiment_id,
                                            payload={"total": len(rows), "completed": done, "failed": failed}))
             runner = TaskRunner(self.repo, self.store, cfg, self.bus)
             interrupted = aborted = False
             error: PersistenceError | None = None
             try:
-                self.strategy.execute(tasks, runner.run, self.stop_event.is_set)
+                strategy.execute(tasks, runner, self.stop_event.is_set)
             except KeyboardInterrupt:
                 interrupted = True
             except PersistenceError as exc:

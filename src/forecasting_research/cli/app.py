@@ -29,6 +29,7 @@ from ..config.loader import dump_config_yaml, load_config
 from ..config.schemas import AppConfig
 from ..domain.contracts import ProgressEvent
 from ..domain.exceptions import ResearchError
+from ..execution.factory import create_strategy
 from ..monitoring import events as E
 from ..monitoring.progress import format_seconds
 
@@ -178,7 +179,21 @@ def _override_methods(cfg: AppConfig, methods: str | None) -> AppConfig:
     return AppConfig.model_validate(data)
 
 
+def _override_execution(cfg: AppConfig, workers: int | None) -> AppConfig:
+    """--workers: 1 = sequential, N >= 2 = parallel with N processes, 0 = parallel with automatic worker count."""
+    if workers is None:
+        return cfg
+    data = cfg.model_dump(mode="json")
+    if workers == 1:
+        data["execution"]["strategy"] = "sequential"
+    else:
+        data["execution"]["strategy"] = "parallel"
+        data["execution"]["workers"] = "auto" if workers == 0 else workers
+    return AppConfig.model_validate(data)
+
+
 MethodsOpt = Annotated[str | None, typer.Option("--methods", help="Comma-separated methods overriding the config.")]
+WorkersOpt = Annotated[int | None, typer.Option("--workers", "-j", min=0, help="Worker processes: 1 = sequential, N = parallel, 0 = automatic. Default: from config.")]
 NoProgressOpt = Annotated[bool, typer.Option("--no-progress", help="Disable the live progress display.")]
 
 
@@ -200,14 +215,14 @@ def generate(ctx: typer.Context, no_progress: NoProgressOpt = False) -> None:
 
 @app.command()
 @guarded
-def run(ctx: typer.Context, methods: MethodsOpt = None, no_progress: NoProgressOpt = False) -> None:
+def run(ctx: typer.Context, methods: MethodsOpt = None, workers: WorkersOpt = None, no_progress: NoProgressOpt = False) -> None:
     """Generate datasets AND evaluate every configured method on them (Mode B)."""
     g = _g(ctx)
-    cfg = _override_methods(g.cfg(), methods)
+    cfg = _override_execution(_override_methods(g.cfg(), methods), workers)
     ra = g.app()
     gen = cfg.generation
     console.print(f"Design: {gen.combination_count()} combinations x {gen.replications} replications = {gen.dataset_count()} datasets; "
-                  f"methods: {', '.join(cfg.forecasting.methods)}")
+                  f"methods: {', '.join(cfg.forecasting.methods)}; execution: {create_strategy(cfg.execution).describe()}")
     exp_id = None
     with progress_display(ra, not no_progress):
         try:
@@ -233,11 +248,12 @@ def evaluate(
     noise: Annotated[str | None, typer.Option(help="low | medium | high")] = None,
     length: Annotated[int | None, typer.Option(help="Dataset length filter.")] = None,
     methods: MethodsOpt = None,
+    workers: WorkersOpt = None,
     no_progress: NoProgressOpt = False,
 ) -> None:
     """Evaluate methods on previously generated datasets (Mode C)."""
     g = _g(ctx)
-    cfg = _override_methods(g.cfg(), methods)
+    cfg = _override_execution(_override_methods(g.cfg(), methods), workers)
     ra = g.app()
     filters = {"seasonality_type": seasonality, "seasonal_period": period, "trend_type": trend, "noise_level": noise, "length": length}
     exp_id = None
@@ -259,10 +275,17 @@ def resume(
     experiment_id: Annotated[str, typer.Argument(help="Experiment id.")],
     retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Also retry FAILED evaluations.")] = False,
     retry_category: Annotated[list[str] | None, typer.Option("--retry-category", help="Only retry these failure categories (repeatable).")] = None,
+    workers: WorkersOpt = None,
     no_progress: NoProgressOpt = False,
 ) -> None:
-    """Resume an interrupted experiment; valid completed evaluations are skipped."""
-    ra = _g(ctx).app()
+    """Resume an interrupted experiment; valid completed evaluations are skipped.
+
+    Execution settings come from the loaded configuration (or --workers), not from the original run.
+    """
+    g = _g(ctx)
+    g._cfg = _override_execution(g.cfg(), workers)
+    ra = g.app()
+    console.print(f"Execution: {create_strategy(ra.config.execution).describe()}")
     with progress_display(ra, not no_progress):
         try:
             ra.resume(experiment_id, retry_failed or bool(retry_category), retry_category)
