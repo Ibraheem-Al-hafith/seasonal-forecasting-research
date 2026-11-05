@@ -12,10 +12,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..config.loader import config_from_dict
-from ..config.schemas import AppConfig, ExecutionCfg
+from ..config.schemas import SARIMA_METHOD_VERSION, AppConfig, ExecutionCfg
 from ..domain.contracts import DatasetRecord, ProgressEvent, utcnow
 from ..domain.enums import ExperimentOutcome, ExperimentStatus
-from ..domain.exceptions import ArtifactIntegrityError, DataError, PersistenceError, StopRequested
+from ..domain.exceptions import (
+    ArtifactIntegrityError,
+    ConfigError,
+    DataError,
+    PersistenceError,
+    StopRequested,
+)
 from ..execution.base import ExecutionStrategy
 from ..forecasting.registry import validate_method_names
 from ..generation.generator import DatasetGenerator
@@ -133,6 +139,13 @@ class ExperimentManager:
             cfg = cfg.model_copy(update={"execution": execution})
         validate_method_names(cfg.forecasting.methods)
         plan = plan_resume(self.repo, self.store, experiment_id, retry_failed, retry_categories)
+        legacy_sarima = "method_version" not in (exp["config"].get("forecasting", {}).get("sarima") or {})
+        if legacy_sarima and any(t.model_name == "sarima" for t in plan.tasks):
+            raise ConfigError(
+                f"Experiment {experiment_id} was created with SARIMA method v1 (original implementation). Resuming it would "
+                f"run the current SARIMA (method v{SARIMA_METHOD_VERSION}) for the remaining evaluations and mix two different "
+                "methods inside one experiment. Start a new experiment instead (research run / evaluate); the existing "
+                "results stay available for analysis.")
         log.info("resume plan: %d to run, %d skipped, %d invalid-completed, %d retried-failed, %d permanent failures",
                  len(plan.tasks), plan.skipped_completed, len(plan.invalid_completed), plan.retried_failed,
                  plan.permanent_failed, extra={"experiment_id": experiment_id})

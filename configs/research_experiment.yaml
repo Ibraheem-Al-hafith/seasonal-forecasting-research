@@ -1,0 +1,70 @@
+# Full experimental design from the blueprint:
+#   2 seasonality x 3 periods x 2 trends x 3 noise x 3 lengths = 108 combinations
+#   x 5 replications = 540 datasets;  x 3 methods = 1,620 evaluations
+experiment:
+  name: seasonal_forecasting_comparison
+  description: Compare forecasting methods under controlled conditions
+
+generation:
+  seasonality_types: [additive, multiplicative]
+  seasonal_periods: [24, 7, 30, 3]
+  trends: [none, linear]
+  noise_levels: [low, medium, high]
+  dataset_lengths: [150, 200, 500]
+  replications: 5
+  base_seed: 42
+  params:                       # exact generator mathematics (recorded in every dataset's metadata)
+    base_level: 100.0
+    trend_slope: 0.3            # linear trend: base + slope * t
+    additive_amplitude: 15.0    # additive seasonal component = A * p(t),  max|p| = 1
+    multiplicative_amplitude: 0.15   # multiplicative seasonal factor = 1 + a * p(t)
+    harmonic2_amplitude: 0.4
+    noise_sigma: {low: 0.02, medium: 0.05, high: 0.10}   # relative to base level / factor
+    multiplicative_noise_clip: 0.5                        # keeps noise factor strictly positive
+
+evaluation:
+  train_fraction: 0.8
+  forecast_horizon: null        # null -> one complete seasonal cycle
+  seasonal_mode: matched        # matched | additive | multiplicative (deliberate mis-specification)
+
+forecasting:
+  methods: [classical_decomposition, holt_winters, sarima]
+  holt_winters:
+    trend_options: [none, add, mul]  # chosen by AICc on training data only
+  sarima:
+    # ---- seasonal differencing (D) ----------------------------------------------------------------------
+    seasonal_differencing_strategy: fixed_one   # fixed_one | fixed_zero | ocsb | ch | seasonal_strength (legacy)
+    #   fixed_one  : default. Without seasonal regressors SARIMA needs D=1 to represent a fixed seasonal pattern well.
+    #   fixed_zero : the report's choice (no seasonal unit root in the generator). Run it as a SENSITIVITY experiment:
+    #                on our measurements it is ~20 % less accurate and leaves autocorrelated residuals (docs/sarima_methodology.md).
+    #   ocsb / ch  : seasonal unit-root tests; need  pip install pmdarima
+    seasonal_strength_threshold: 0.64           # only used by the legacy strategy seasonal_strength
+
+    # ---- regular differencing (d) and deterministic trend ------------------------------------------------
+    kpss_regression: auto                       # c | ct | auto  (auto: trend-stationary series keep d=0 and get a linear trend)
+    kpss_alpha: 0.05
+
+    # ---- search space and criterion -------------------------------------------------------------------------
+    max_pq_sum: 3                               # p + q <= 2
+    max_seasonal_pq_sum: 3                      # P + Q <= 1      (the report assumes 2 -> 36 candidates)
+    selection_criterion: aicc                   # aic | aicc | bic
+    max_iterations: 100
+    time_budget_seconds: 300                    # SOFT: checked between fits (a running fit cannot be interrupted)
+
+    # ---- two-stage bounded search --------------------------------------------------------------------------
+    search_strategy: two_stage                  # two_stage | full_grid (exhaustive, the reference)
+    stage1_max_pq_sum: 2                      # default auto = min(1, max_pq_sum)
+    stage1_max_seasonal_pq_sum: 1             # default auto = min(1, max_seasonal_pq_sum)
+    stage2_trigger: boundary_or_ljung_box       # boundary_or_ljung_box | boundary | ljung_box | always
+    ljung_box_alpha: 0.05
+
+    log_transform_multiplicative: false
+
+execution:
+  strategy: parallel
+
+workspace:
+  path: ./workspace
+
+logging:
+  level: INFO

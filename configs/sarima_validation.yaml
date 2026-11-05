@@ -29,23 +29,40 @@ evaluation:
 
 forecasting:
   methods: [classical_decomposition, holt_winters, sarima]
-  holt_winters:
-    trend_options: [none, add, mul]  # chosen by AICc on training data only
   sarima:
-    max_pq_sum: 2               # p + q <= 2  -> 6 options
-    max_seasonal_pq_sum: 2      # P + Q <= 1  -> 3 options  => 18 candidates
-    selection_criterion: aic
-    max_iterations: 100
-    time_budget_seconds: 300
-    seasonal_strength_threshold: 0.64
+    # ---- seasonal differencing (D) ----------------------------------------------------------------------
+    seasonal_differencing_strategy: fixed_one   # fixed_one | fixed_zero | ocsb | ch | seasonal_strength (legacy)
+    #   fixed_one  : default. Without seasonal regressors SARIMA needs D=1 to represent a fixed seasonal pattern well.
+    #   fixed_zero : the report's choice (no seasonal unit root in the generator). Run it as a SENSITIVITY experiment:
+    #                on our measurements it is ~20 % less accurate and leaves autocorrelated residuals (docs/sarima_methodology.md).
+    #   ocsb / ch  : seasonal unit-root tests; need  pip install pmdarima
+    seasonal_strength_threshold: 0.64           # only used by the legacy strategy seasonal_strength
+
+    # ---- regular differencing (d) and deterministic trend ------------------------------------------------
+    kpss_regression: auto                       # c | ct | auto  (auto: trend-stationary series keep d=0 and get a linear trend)
     kpss_alpha: 0.05
+
+    # ---- search space and criterion -------------------------------------------------------------------------
+    max_pq_sum: 2                               # p + q <= 2
+    max_seasonal_pq_sum: 1                      # P + Q <= 1      (the report assumes 2 -> 36 candidates)
+    selection_criterion: aicc                   # aic | aicc | bic
+    max_iterations: 100
+    time_budget_seconds: 300                    # SOFT: checked between fits (a running fit cannot be interrupted)
+
+    # ---- two-stage bounded search --------------------------------------------------------------------------
+    search_strategy: two_stage                  # two_stage | full_grid (exhaustive, the reference)
+    # stage1_max_pq_sum: 1                      # default auto = min(1, max_pq_sum)
+    # stage1_max_seasonal_pq_sum: 1             # default auto = min(1, max_seasonal_pq_sum)
+    stage2_trigger: boundary_or_ljung_box       # boundary_or_ljung_box | boundary | ljung_box | always
+    ljung_box_alpha: 0.05
+
     log_transform_multiplicative: false
+workspace:
+  path: ./workspace_sarima_v2
+
 
 execution:
   strategy: parallel
-
-workspace:
-  path: ./workspace_sarima_validation
 
 logging:
   level: INFO

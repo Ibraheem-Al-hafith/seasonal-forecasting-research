@@ -12,7 +12,7 @@ from typing import Any
 
 import pandas as pd
 
-from ..analysis import aggregation, comparison, export, plots
+from ..analysis import aggregation, comparison, export, plots, reliability
 from ..config.schemas import AppConfig, ExecutionCfg
 from ..domain.exceptions import ConfigError, DataError, UnknownEntityError
 from ..execution.factory import create_strategy, import_worker_modules
@@ -193,6 +193,18 @@ class ResearchApp:
         frames = [comparison.best_method_per_group(agg, aggregation.normalize_dims(group_by), m, stat) for m in metrics]
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
+    def reliability(self, experiment_ids: list[str] | None = None, group_by: list[str] | str | None = None) -> pd.DataFrame:
+        """Success rate, extreme forecasts and runtime per (group, model); failures are always counted."""
+        for e in experiment_ids or []:
+            self.repo.experiments.get(e)
+        return reliability.reliability_table(self.repo, self.store, experiment_ids, group_by)
+
+    def sarima_search(self, experiment_ids: list[str] | None = None, group_by: list[str] | str | None = None) -> pd.DataFrame:
+        """What the SARIMA searches did: fits, stage-2 rate, truncation, convergence, differencing choices."""
+        for e in experiment_ids or []:
+            self.repo.experiments.get(e)
+        return reliability.sarima_search_table(self.repo, experiment_ids, group_by)
+
     def forecast_figure(self, experiment_id: str, dataset_id: str):
         return plots.plot_actual_vs_forecast(self.repo, self.store, experiment_id, dataset_id)
 
@@ -201,7 +213,7 @@ class ResearchApp:
 
     def export_results(self, experiment_id: str, kind: str = "evaluations", group_by: list[str] | str | None = None,
                        metric: str = "RMSE", out: str | Path | None = None) -> Path:
-        """kind: evaluations | aggregate | best | forecasts. Writes a CSV into workspace/exports (or `out`)."""
+        """kind: evaluations | aggregate | best | forecasts | reliability | search. Writes a CSV into workspace/exports (or `out`)."""
         self.repo.experiments.get(experiment_id)
         if kind == "evaluations":
             df = self.results([experiment_id])
@@ -211,8 +223,12 @@ class ResearchApp:
             df = self.best_methods([experiment_id], group_by, [metric])
         elif kind == "forecasts":
             df = export.forecasts_long_table(self.repo, self.store, experiment_id)
+        elif kind == "reliability":
+            df = self.reliability([experiment_id], group_by)
+        elif kind == "search":
+            df = self.sarima_search([experiment_id], group_by)
         else:
-            raise ConfigError(f"Unknown export kind {kind!r}: evaluations | aggregate | best | forecasts")
+            raise ConfigError(f"Unknown export kind {kind!r}: evaluations | aggregate | best | forecasts | reliability | search")
         path = Path(out) if out else self.workspace / "exports" / f"{experiment_id}_{kind}.csv"
         return export.write_csv(df, path)
 

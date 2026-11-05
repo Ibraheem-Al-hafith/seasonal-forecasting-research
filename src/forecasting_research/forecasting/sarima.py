@@ -1,71 +1,34 @@
-"""Method C: SARIMA with bounded automatic order selection (statsmodels SARIMAX).
+"""Method C: SARIMA with bounded, two-stage automatic order selection (statsmodels SARIMAX), method version 2.
 
-Everything below uses TRAIN data only:
-  D : seasonal differencing if seasonal strength (Wang-Smith-Hyndman) > threshold
-  d : 1 if KPSS rejects stationarity (after seasonal differencing), else 0
-  (p,q) with p+q <= max_pq_sum  x  (P,Q) with P+Q <= max_seasonal_pq_sum  -> grid search by AIC/BIC
-A constant is included when d + D <= 1 (level when 0, drift when 1).
-Non-converged candidates are skipped; the search stops early once the soft time budget is spent.
+Components (see forecasting/sarima_components/):
+  differencing.py : seasonal strength diagnostic, choice of D and d, deterministic trend
+  candidates.py   : candidate generation (full grid / stage 1 / stage 2)
+  fitting.py      : fit one candidate, strict convergence handling, Ljung-Box diagnostic
+  search.py       : stages, soft time budget, expansion decision
+
+All decisions use TRAINING data only.
 """
 
 from __future__ import annotations
 
-import math
-import time
-
 import numpy as np
-from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.tsa.stattools import kpss
 
-from ..config.schemas import ForecastingCfg, SarimaCfg
+from ..config.schemas import SARIMA_METHOD_VERSION, ForecastingCfg, SarimaCfg
 from ..domain.contracts import ForecastRequest, StageCallback
 from ..domain.enums import Stage
-from ..domain.exceptions import EvaluationTimeout, ModelFitError
+from ..domain.exceptions import DataError, InvalidForecastError
 from .base import Forecaster
-from .classical_decomposition import centered_moving_average, seasonal_indices
 from .registry import register
+from .sarima_components.candidates import full_grid
+from .sarima_components.differencing import (
+    choose_regular_differencing,
+    choose_seasonal_differencing,
+    require_strategy_dependencies,
+)
+from .sarima_components.search import run_search
 
-
-def seasonal_strength(y: np.ndarray, m: int) -> float:
-    """F_s = max(0, 1 - Var(remainder) / Var(seasonal + remainder)), additive decomposition."""
-    trend = centered_moving_average(y, m)
-    idx = seasonal_indices(y, trend, m, "additive")
-    seasonal = idx[np.arange(len(y)) % m]
-    ok = np.isfinite(trend)
-    remainder = (y - trend - seasonal)[ok]
-    denom = np.var(seasonal[ok] + remainder)
-    if denom <= 0:
-        return 0.0
-    return float(max(0.0, 1.0 - np.var(remainder) / denom))
-
-
-def choose_differencing(y: np.ndarray, m: int, cfg: SarimaCfg) -> tuple[int, int, dict]:
-    strength = seasonal_strength(y, m)
-    D = 1 if strength > cfg.seasonal_strength_threshold else 0
-    z = y[m:] - y[:-m] if D == 1 else y
-    d, pval = 0, None
-    try:
-        with np.errstate(all="ignore"):
-            _, pval, *_ = kpss(z, regression="c", nlags="auto")
-        pval = float(pval)
-        d = 1 if pval < cfg.kpss_alpha else 0
-    except Exception:  # KPSS failure -> conservative: no regular differencing
-        d = 0
-    return d, D, {"seasonal_strength": strength, "kpss_pvalue": pval}
-
-
-def candidate_grid(cfg: SarimaCfg) -> list[tuple[tuple[int, int], tuple[int, int]]]:
-    """Ordered simplest-first so a time-budget cut-off still leaves sensible candidates."""
-    pq = [(p, q) for p in range(cfg.max_pq_sum + 1) for q in range(cfg.max_pq_sum + 1) if p + q <= cfg.max_pq_sum]
-    spq = [
-        (p, q)
-        for p in range(cfg.max_seasonal_pq_sum + 1)
-        for q in range(cfg.max_seasonal_pq_sum + 1)
-        if p + q <= cfg.max_seasonal_pq_sum
-    ]
-    grid = [(a, b) for a in pq for b in spq]
-    grid.sort(key=lambda ab: (sum(ab[0]) + sum(ab[1]), ab))
-    return grid
+# Largest magnitude (relative to the training range) a back-transformed forecast may have before it is rejected.
+_MAX_REL_MAGNITUDE = 1e6
 
 
 class SarimaForecaster(Forecaster):
@@ -73,76 +36,76 @@ class SarimaForecaster(Forecaster):
 
     def __init__(self, cfg: SarimaCfg | None = None):
         self.cfg = cfg or SarimaCfg()
+        require_strategy_dependencies(self.cfg)  # fail at construction, not mid-experiment
 
     @classmethod
     def from_config(cls, cfg: ForecastingCfg) -> SarimaForecaster:
         return cls(cfg.sarima)
 
+    # ---- optional log transformation, validated in both directions -------------------------------------
+    @staticmethod
+    def _transform(train: np.ndarray, use_log: bool) -> np.ndarray:
+        if not use_log:
+            return np.asarray(train, dtype=float)
+        if not np.all(np.isfinite(train)) or np.any(train <= 0):
+            raise DataError("log transform requires strictly positive, finite training data")
+        return np.log(train)
+
+    @staticmethod
+    def _inverse(fc: np.ndarray, use_log: bool, train: np.ndarray) -> np.ndarray:
+        if not use_log:
+            return fc
+        if not np.all(np.isfinite(fc)):
+            raise InvalidForecastError("non-finite forecast in the log domain")
+        with np.errstate(over="ignore"):
+            out = np.exp(fc)
+        span = float(np.ptp(train)) or float(np.max(np.abs(train))) or 1.0
+        if not np.all(np.isfinite(out)) or np.max(np.abs(out)) > _MAX_REL_MAGNITUDE * span:
+            raise InvalidForecastError("inverse log transform overflowed (forecast is not numerically meaningful)")
+        return out
+
     def _fit_forecast(self, req: ForecastRequest, on_stage: StageCallback):
-        cfg = self.cfg
-        m, h = req.seasonal_period, req.horizon
+        cfg, m, h = self.cfg, req.seasonal_period, req.horizon
         use_log = cfg.log_transform_multiplicative and req.seasonal_form == "multiplicative"
-        y = np.log(req.train) if use_log else np.asarray(req.train)
+        y = self._transform(req.train, use_log)
 
         on_stage(Stage.SELECT_PARAMETERS)
-        d, D, diag = choose_differencing(y, m, cfg)
-        trend = "c" if d + D <= 1 else "n"
-        t0 = time.monotonic()
-        candidates: list[dict] = []
-        best = None  # (score, order, sorder, result)
-        truncated = False
-        for order_pq, sorder_pq in candidate_grid(cfg):
-            if best is not None and time.monotonic() - t0 > cfg.time_budget_seconds:
-                truncated = True
-                break
-            if best is None and time.monotonic() - t0 > cfg.time_budget_seconds:
-                raise EvaluationTimeout(
-                    f"SARIMA search exceeded {cfg.time_budget_seconds}s without a usable candidate"
-                )
-            order = (order_pq[0], d, order_pq[1])
-            sorder = (sorder_pq[0], D, sorder_pq[1], m)
-            rec: dict = {"order": list(order), "seasonal_order": list(sorder)}
-            try:
-                model = SARIMAX(y, order=order, seasonal_order=sorder, trend=trend,
-                                enforce_stationarity=True, enforce_invertibility=True)
-                res = model.fit(disp=False, maxiter=cfg.max_iterations)
-                converged = bool(res.mle_retvals.get("converged", True)) if hasattr(res, "mle_retvals") and res.mle_retvals else True
-                score = float(res.aic if cfg.selection_criterion == "aic" else res.bic)
-                rec.update(converged=converged, score=score if math.isfinite(score) else None)
-                if not converged or not math.isfinite(score):
-                    rec["skipped"] = "non-converged" if not converged else "non-finite criterion"
-                elif best is None or score < best[0]:
-                    best = (score, order, sorder, res)
-            except Exception as exc:
-                rec.update(converged=False, error=f"{type(exc).__name__}: {exc}"[:200])
-            candidates.append(rec)
+        D, d_seasonal = choose_seasonal_differencing(y, m, "additive" if use_log else req.seasonal_form, cfg)
+        d, trend, d_regular = choose_regular_differencing(y, m, D, cfg)
+        outcome = run_search(y, d, D, m, trend, cfg)
+        best = outcome.best
 
-        if best is None:
-            raise ModelFitError(f"SARIMA: all {len(candidates)} candidate configurations failed")
-        score, order, sorder, res = best
-        on_stage(Stage.FIT_MODEL)  # best candidate already fitted during search
+        on_stage(Stage.FIT_MODEL)  # the selected model was already fitted during the search
         on_stage(Stage.GENERATE_FORECAST)
-        fc = np.asarray(res.forecast(h), dtype=float)
-        if use_log:
-            fc = np.exp(fc)
+        fc = self._inverse(np.asarray(outcome.best_result.forecast(h), dtype=float), use_log, np.asarray(req.train, dtype=float))
+
         params = {
-            "order": list(order),
-            "seasonal_order": list(sorder),
+            "method_version": SARIMA_METHOD_VERSION,
+            "order": list(best.order),
+            "seasonal_order": list(best.seasonal_order),
             "trend": trend,
+            "deterministic_trend": d_regular["deterministic_trend"],
             "selection_criterion": cfg.selection_criterion,
-            "criterion_value": score,
+            "criterion_value": best.score,
+            "aic": best.aic, "aicc": best.aicc, "bic": best.bic,
             "log_transform": use_log,
+            "differencing": {"D": D, "d": d, "seasonal": d_seasonal, "regular": d_regular},
+            "search_strategy": cfg.search_strategy,
             "search_limits": {
-                "max_pq_sum": cfg.max_pq_sum,
-                "max_seasonal_pq_sum": cfg.max_seasonal_pq_sum,
-                "max_iterations": cfg.max_iterations,
-                "time_budget_seconds": cfg.time_budget_seconds,
+                "max_pq_sum": cfg.max_pq_sum, "max_seasonal_pq_sum": cfg.max_seasonal_pq_sum,
+                "stage1_max_pq_sum": cfg.stage1_pq(), "stage1_max_seasonal_pq_sum": cfg.stage1_spq(),
+                "max_iterations": cfg.max_iterations, "time_budget_seconds": cfg.time_budget_seconds,
             },
-            "n_candidates_considered": len(candidates),
-            "n_candidates_planned": len(candidate_grid(cfg)),
-            "search_truncated": truncated,
-            "differencing_diagnostics": diag,
-            "candidates": candidates,
+            "n_candidates_planned": len(full_grid(cfg)),
+            "n_candidates_considered": len(outcome.records),
+            "search_truncated": outcome.truncated,
+            "stopped_reason": outcome.stopped_reason,
+            "search_seconds": round(outcome.seconds, 3),
+            "stages": outcome.stages,
+            "expansion": outcome.expansion,
+            **outcome.counts(),
+            "best_stage": best.stage,
+            "candidates": [r.to_dict() for r in outcome.records],
         }
         return fc, params, {}
 

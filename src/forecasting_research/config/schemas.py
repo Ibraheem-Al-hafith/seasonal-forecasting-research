@@ -101,25 +101,71 @@ class EvaluationCfg(_Strict):
     seasonal_mode: Literal["matched", "additive", "multiplicative"] = "matched"
 
 
+SARIMA_METHOD_VERSION = 2  # v1 = original implementation (seasonal-strength D, level-only KPSS, full grid, AIC)
+
+
 class SarimaCfg(_Strict):
-    max_pq_sum: int = Field(2, ge=0, le=4)  # p + q <= this  (2 -> 6 options)
-    max_seasonal_pq_sum: int = Field(1, ge=0, le=2)  # P + Q <= this (1 -> 3 options)
-    selection_criterion: Literal["aic", "bic"] = "aic"
+    """SARIMA search configuration (method version 2). Every field is recorded with each experiment."""
+
+    method_version: Literal[2] = SARIMA_METHOD_VERSION
+
+    # ---- seasonal differencing (D) -------------------------------------------------------------------
+    # fixed_one  : D = 1 (default). A SARIMA without seasonal regressors can only represent a FIXED seasonal pattern
+    #              through seasonal differencing (with a seasonal MA term); measured on this generator it is as accurate
+    #              as Holt-Winters / classical decomposition, whereas D = 0 is ~20 % worse and leaves autocorrelated
+    #              residuals in ~90 % of fits (docs/sarima_methodology.md).
+    # fixed_zero : D = 0. Theoretically cleanest for deterministic seasonality (no seasonal unit root) but handicaps
+    #              SARIMA; use it as an explicit sensitivity experiment, not silently.
+    # ocsb / ch  : data-driven seasonal unit-root tests (OCSB / Canova-Hansen) via the optional pmdarima package
+    # seasonal_strength : legacy rule "D = 1 if strength > threshold". NOT a unit-root test; kept only for comparison.
+    seasonal_differencing_strategy: Literal["fixed_zero", "fixed_one", "ocsb", "ch", "seasonal_strength"] = "fixed_one"
+    seasonal_strength_threshold: float = Field(0.64, gt=0, lt=1)  # used only by strategy seasonal_strength
+
+    # ---- regular differencing (d) and deterministic trend ----------------------------------------------
+    # c    : KPSS around a constant; rejection -> d = 1 (legacy behaviour)
+    # ct   : KPSS around a linear trend; rejection -> d = 1, otherwise a deterministic linear trend, d = 0
+    # auto : 'c' first; if rejected, 'ct'. Trend-stationary series keep d = 0 and get a deterministic trend
+    #        (no information about the generator is used: this is decided from the training data only)
+    kpss_regression: Literal["c", "ct", "auto"] = "auto"
+    kpss_alpha: float = Field(0.05, gt=0, lt=1)
+
+    # ---- search space ----------------------------------------------------------------------------------------
+    max_pq_sum: int = Field(2, ge=0, le=4)  # p + q <= this
+    max_seasonal_pq_sum: int = Field(1, ge=0, le=2)  # P + Q <= this
+    selection_criterion: Literal["aic", "aicc", "bic"] = "aicc"
     max_iterations: int = Field(100, ge=10, le=2000)
     time_budget_seconds: float = Field(300.0, gt=0)
-    seasonal_strength_threshold: float = Field(0.64, gt=0, lt=1)
-    kpss_alpha: float = Field(0.05, gt=0, lt=1)
+
+    # ---- search strategy -------------------------------------------------------------------------------------
+    search_strategy: Literal["full_grid", "two_stage"] = "two_stage"
+    stage1_max_pq_sum: int | None = Field(None, ge=0, le=4)  # None = auto: min(1, max_pq_sum)
+    stage1_max_seasonal_pq_sum: int | None = Field(None, ge=0, le=2)  # None = auto: min(1, max_seasonal_pq_sum)
+    # when to run stage 2 (always on TRAINING data only):
+    #   boundary_or_ljung_box : best stage-1 model sits on a stage-1 limit OR training residuals are autocorrelated
+    #   boundary | ljung_box  : only that indicator          always : full grid (== full_grid, but recorded as staged)
+    stage2_trigger: Literal["boundary_or_ljung_box", "boundary", "ljung_box", "always"] = "boundary_or_ljung_box"
+    ljung_box_alpha: float = Field(0.05, gt=0, lt=1)
+
     log_transform_multiplicative: bool = False
 
+    @model_validator(mode="after")
+    def _check_stage_limits(self) -> SarimaCfg:
+        if (self.stage1_max_pq_sum or 0) > self.max_pq_sum or (self.stage1_max_seasonal_pq_sum or 0) > self.max_seasonal_pq_sum:
+            raise ValueError("stage1 limits must not exceed max_pq_sum / max_seasonal_pq_sum")
+        return self
+
+    def stage1_pq(self) -> int:
+        """Effective stage-1 limit for p + q (explicit value, or auto = min(1, max_pq_sum))."""
+        return self.stage1_max_pq_sum if self.stage1_max_pq_sum is not None else min(1, self.max_pq_sum)
+
+    def stage1_spq(self) -> int:
+        """Effective stage-1 limit for P + Q."""
+        return self.stage1_max_seasonal_pq_sum if self.stage1_max_seasonal_pq_sum is not None else min(1, self.max_seasonal_pq_sum)
+
     def candidate_count(self) -> int:
-        n_pq = sum(1 for p in range(self.max_pq_sum + 1) for q in range(self.max_pq_sum + 1) if p + q <= self.max_pq_sum)
-        n_sp = sum(
-            1
-            for p in range(self.max_seasonal_pq_sum + 1)
-            for q in range(self.max_seasonal_pq_sum + 1)
-            if p + q <= self.max_seasonal_pq_sum
-        )
-        return n_pq * n_sp
+        from ..forecasting.sarima_components.candidates import full_grid
+
+        return len(full_grid(self))
 
 
 class HoltWintersCfg(_Strict):

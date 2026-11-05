@@ -23,6 +23,15 @@ def _h(a):
     return hashlib.sha256(np.ascontiguousarray(a).tobytes()).hexdigest()
 
 
+def _without_timing(obj):
+    """Wall-clock durations are diagnostics, not selected parameters: they legitimately differ between runs."""
+    if isinstance(obj, dict):
+        return {k: _without_timing(v) for k, v in obj.items() if k not in ("seconds", "fit_seconds", "search_seconds")}
+    if isinstance(obj, list):
+        return [_without_timing(v) for v in obj]
+    return obj
+
+
 def test_forecast_request_contract_has_no_room_for_leaks():
     assert {f.name for f in dataclasses.fields(ForecastRequest)} == {"train", "seasonal_period", "horizon", "seasonal_form"}
 
@@ -41,7 +50,7 @@ def test_changing_future_observations_cannot_change_forecast_or_parameters(app, 
     a = ev.evaluate(y, rec.seasonality_type, rec.seasonal_period, create_method(method, cfg.forecasting))
     b = ev.evaluate(y2, rec.seasonality_type, rec.seasonal_period, create_method(method, cfg.forecasting))
     assert np.array_equal(a.forecast, b.forecast)
-    assert a.parameters == b.parameters  # incl. SARIMA order/AIC and Holt-Winters trend/AICc
+    assert _without_timing(a.parameters) == _without_timing(b.parameters)  # incl. SARIMA orders, diagnostics, stage-2 decision
     assert not np.array_equal(a.actual, b.actual) and a.metrics["RMSE"].value != b.metrics["RMSE"].value
 
 

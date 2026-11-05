@@ -6,7 +6,6 @@ from forecasting_research.domain.contracts import ForecastRequest
 from forecasting_research.domain.exceptions import ConfigError, DataError
 from forecasting_research.forecasting import classical_decomposition as cd
 from forecasting_research.forecasting import registry
-from forecasting_research.forecasting.sarima import candidate_grid, choose_differencing
 
 CFG = load_config(None).forecasting
 METHODS = ["classical_decomposition", "holt_winters", "sarima"]
@@ -87,23 +86,14 @@ def test_centered_ma_even_odd():
         assert np.allclose(tr[h:-h], y[h:-h])  # linear data is reproduced by a centred MA
 
 
-def test_sarima_grid_bounded():
-    g = candidate_grid(CFG.sarima)
-    assert len(g) == 18 == CFG.sarima.candidate_count()
-    assert all(sum(a) <= 2 and sum(b) <= 1 for a, b in g)
-    assert sum(g[0][0]) + sum(g[0][1]) == 0  # simplest first
-
-
-def test_sarima_differencing_detects_trend_and_season():
-    d, D, diag = choose_differencing(series(m=12, n=120, trend=0.5), 12, CFG.sarima)
-    assert D == 1 and diag["seasonal_strength"] > 0.64
-
-
 def test_sarima_search_records_diagnostics():
     p = registry.create_method("sarima", CFG).forecast(ForecastRequest(series(), 4, 4, "additive")).parameters
-    assert p["n_candidates_considered"] <= p["n_candidates_planned"] == 18
-    assert p["search_limits"]["max_pq_sum"] == 2 and p["selection_criterion"] == "aic"
+    assert p["method_version"] == 2 and p["n_candidates_planned"] == 18
+    assert 9 <= p["n_candidates_considered"] <= 18  # stage 1 always runs; stage 2 only when warranted
+    assert p["search_limits"]["max_pq_sum"] == 2 and p["selection_criterion"] == "aicc"
+    assert p["criterion_value"] == p["aicc"]
     assert len(p["order"]) == 3 and len(p["seasonal_order"]) == 4
+    assert p["stages"][0]["stage"] == 1 and "triggered" in p["expansion"]
 
 
 def test_holt_winters_trend_selection_recorded():

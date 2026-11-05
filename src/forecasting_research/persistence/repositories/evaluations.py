@@ -175,6 +175,24 @@ class EvaluationRepository:
             return len(ids)
 
     # ---- analysis queries ----------------------------------------------------------------
+    def parameter_rows(self, experiment_ids: list[str] | None = None, model_name: str | None = None) -> pd.DataFrame:
+        """One row per evaluation of a model (all statuses) with its parsed selected-parameters document."""
+        where, args = [], []
+        if experiment_ids:
+            where.append(f"e.experiment_id IN ({','.join('?' * len(experiment_ids))})")
+            args += list(experiment_ids)
+        if model_name:
+            where.append("e.model_name=?")
+            args.append(model_name)
+        sql = f"""SELECT e.evaluation_id, e.experiment_id, e.dataset_id, e.model_name, e.status, e.runtime_seconds,
+                         e.parameters_json, d.seasonality_type, d.seasonal_period, d.trend_type, d.noise_level, d.length
+                  FROM model_evaluations e JOIN datasets d ON d.dataset_id=e.dataset_id
+                  {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY e.experiment_id, e.rowid"""
+        with self.db.connect() as c:
+            df = pd.read_sql_query(sql, c, params=args)
+        df["parameters"] = [json.loads(x) if x else None for x in df.pop("parameters_json")]
+        return df
+
     def results_table(self, experiment_ids: list[str] | None = None) -> pd.DataFrame:
         """One row per evaluation (all statuses) joined with dataset factors and wide metrics."""
         where, args = "", []
@@ -182,7 +200,7 @@ class EvaluationRepository:
             where = f"WHERE e.experiment_id IN ({','.join('?' * len(experiment_ids))})"
             args = list(experiment_ids)
         sql = f"""SELECT e.evaluation_id, e.experiment_id, e.dataset_id, e.model_name, e.status, e.failure_category,
-                         e.error_summary, e.runtime_seconds, e.attempts, e.horizon,
+                         e.error_summary, e.runtime_seconds, e.attempts, e.horizon, e.train_size,
                          d.seasonality_type, d.seasonal_period, d.trend_type, d.noise_level, d.length, d.replication
                   FROM model_evaluations e JOIN datasets d ON d.dataset_id=e.dataset_id {where}
                   ORDER BY e.experiment_id, e.rowid"""

@@ -33,13 +33,22 @@ deseasonalised series → forecast `T̂(t) + S` or `T̂(t) × S`, repeating the 
 **Holt-Winters**: `ExponentialSmoothing`, seasonal form as above, `initialization_method="estimated"`, no damping, no Box-Cox;
 trend ∈ {none, additive} chosen by AICc on training data.
 
-**SARIMA** (all steps on training data): seasonal differencing `D=1` if seasonal strength `F_s = 1 − Var(R)/Var(S+R)` exceeds
-0.64; regular `d=1` if KPSS (level, α = 0.05) rejects on the (seasonally differenced) series; grid over `(p,q)`, `p+q ≤ 2`
-(6) × `(P,Q)`, `P+Q ≤ 1` (3) = 18 candidates, simplest first, each with ≤100 iterations; AIC selection; non-converged
-candidates skipped; a constant is included when `d + D ≤ 1`; soft 300 s budget checked between candidates (search stops
-early, flagged `search_truncated`; with no usable candidate the evaluation fails as `TIMEOUT`). `log_transform_multiplicative`
-(off by default) fits SARIMA on log data when the seasonal form is multiplicative. Search limits, every candidate
-and its score, the selected orders and fitting warnings are stored with the evaluation.
+**SARIMA** (method version 2; all steps on training data - full details, evidence and the reasoning behind each choice in
+`docs/sarima_methodology.md`):
+
+* seasonal differencing `D`: `fixed_one` by default (alternatives: `fixed_zero`, `ocsb`, `ch` via pmdarima, legacy
+  `seasonal_strength`). Seasonal strength is stored as a *diagnostic* (log domain for multiplicative data) and never decides `D`
+  by default;
+* regular differencing `d` and trend: KPSS around a constant; if rejected, KPSS around a linear trend ("auto"). A
+  trend-stationary series keeps `d = 0` and gets an explicit deterministic linear trend (`trend='ct'`); otherwise `d = 1` with a
+  drift. The decision uses the training data only, never the generator's trend type;
+* search: two-stage bounded grid. Stage 1 = first-order candidates (`p+q <= 1`, `P+Q <= 1`: 9 candidates). Stage 2 = the remaining
+  candidates of the full grid (`p+q <= 2`, `P+Q <= 1`: 9 more), run only if the best stage-1 model sits on a stage-1 limit or its
+  training residuals fail a Ljung-Box test; the reasons are stored. `search_strategy: full_grid` reproduces the exhaustive search;
+* selection by AICc (explicit `aic | aicc | bic` mapping). A candidate is selectable only if it fitted, reported convergence
+  and has a finite criterion; missing convergence metadata is never treated as converged;
+* soft time budget (checked between fits; stage 2 skipped if stage 1 exhausts it; `TIMEOUT` if no usable candidate);
+* log transform (optional) validated in both directions; per-candidate records (status, scores, fit seconds) stored.
 
 ## Metrics
 

@@ -376,7 +376,7 @@ def analyze(
     group_by: Annotated[str | None, typer.Option("--group-by", help="Comma list of: seasonality,period,trend,noise,length (default: all five).")] = None,
     metric: Annotated[list[str] | None, typer.Option("--metric", "-m", help="MAE, MSE, RMSE, MAPE (repeatable).")] = None,
     stat: Annotated[str, typer.Option(help="Statistic used to rank methods: mean | median | min | max | std")] = "mean",
-    view: Annotated[str, typer.Option(help="best | aggregate | wins")] = "best",
+    view: Annotated[str, typer.Option(help="best | aggregate | wins | reliability | search")] = "best",
     max_rows: Annotated[int, typer.Option()] = 60,
 ) -> None:
     """Grouped comparison of methods from stored results."""
@@ -389,7 +389,11 @@ def analyze(
         n_u = int((~res["status"].isin(["COMPLETED", "FAILED"])).sum())
         console.print(f"Evaluations: {len(res)} total, {int((res['status'] == 'COMPLETED').sum())} completed, {n_f} failed, {n_u} unfinished "
                       f"(failures are excluded from metric statistics but always counted)")
-    if view == "aggregate":
+    if view == "reliability":  # grouping defaults to "overall per model" here (the 5-way default is too fine)
+        print_df(ra.reliability(ids, dims), "Reliability and cost per model (failures always counted)", max_rows, float_fmt="{:.2f}")
+    elif view == "search":
+        print_df(ra.sarima_search(ids, dims), "SARIMA search diagnostics", max_rows, float_fmt="{:.2f}")
+    elif view == "aggregate":
         print_df(ra.aggregate(ids, dims, metric), "Aggregated metrics", max_rows)
     else:
         best = ra.best_methods(ids, dims, metric, stat)
@@ -409,7 +413,7 @@ def analyze(
 def export(
     ctx: typer.Context,
     experiment_id: str,
-    kind: Annotated[str, typer.Option(help="evaluations | aggregate | best | forecasts")] = "evaluations",
+    kind: Annotated[str, typer.Option(help="evaluations | aggregate | best | forecasts | reliability | search")] = "evaluations",
     group_by: Annotated[str | None, typer.Option("--group-by")] = None,
     metric: Annotated[str, typer.Option("--metric", "-m")] = "RMSE",
     out: Annotated[Path | None, typer.Option("--out", "-o", help="Output CSV path (default: workspace/exports).")] = None,

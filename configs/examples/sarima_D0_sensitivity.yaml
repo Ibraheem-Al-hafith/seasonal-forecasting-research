@@ -1,0 +1,16 @@
+# Sensitivity experiment: the report's "primary design" with NO seasonal differencing (D = 0).
+# Run it next to a default (D = 1) experiment, in a SEPARATE workspace or clearly named experiment, and report both.
+experiment:
+  name: sarima_sensitivity_D0
+generation:
+  seasonality_types: [additive, multiplicative]
+  seasonal_periods: [4, 12]
+  trends: [none, linear]
+  noise_levels: [medium]
+  dataset_lengths: [100]
+  replications: 1
+forecasting:
+  sarima:
+    seasonal_differencing_strategy: fixed_zero
+workspace:
+  path: ./workspace_sarima_D0

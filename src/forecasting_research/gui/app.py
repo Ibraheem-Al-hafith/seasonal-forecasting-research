@@ -132,6 +132,16 @@ class GuiController:
             return pd.DataFrame()
         return self.ra.aggregate([experiment_id], self._dims(dims)).round(4)
 
+    def reliability(self, experiment_id: str | None, dims: list[str]) -> pd.DataFrame:
+        if not experiment_id:
+            return pd.DataFrame()
+        return self.ra.reliability([experiment_id], [DIM_CHOICES.get(d, d) for d in dims] if dims else None).round(3)
+
+    def sarima_search(self, experiment_id: str | None, dims: list[str]) -> pd.DataFrame:
+        if not experiment_id:
+            return pd.DataFrame()
+        return self.ra.sarima_search([experiment_id], [DIM_CHOICES.get(d, d) for d in dims] if dims else None).round(3)
+
     def dataset_choices(self, experiment_id: str | None) -> list[str]:
         if not experiment_id:
             return []
@@ -206,10 +216,15 @@ def build_ui(ra: ResearchApp) -> gr.Blocks:
                 b1 = gr.Button("Best method per group", variant="primary")
                 b2 = gr.Button("Win counts")
                 b3 = gr.Button("Full aggregates")
+            with gr.Row():
+                b4 = gr.Button("Reliability and cost (uses 'Group by'; none selected = overall)")
+                b5 = gr.Button("SARIMA search diagnostics")
             res_tbl = gr.Dataframe(interactive=False, wrap=True)
             b1.click(c.best, [res_exp, dims, mets], res_tbl)
             b2.click(c.wins, [res_exp, dims, mets], res_tbl)
             b3.click(c.aggregate, [res_exp, dims], res_tbl)
+            b4.click(c.reliability, [res_exp, dims], res_tbl)
+            b5.click(c.sarima_search, [res_exp, dims], res_tbl)
 
         with gr.Tab("Visualizations"):
             viz_exp = gr.Dropdown(choices=c.experiment_ids(), label="Experiment")
