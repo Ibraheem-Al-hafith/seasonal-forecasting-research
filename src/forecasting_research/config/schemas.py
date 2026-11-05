@@ -131,7 +131,7 @@ class SarimaCfg(_Strict):
 
     # ---- search space ----------------------------------------------------------------------------------------
     max_pq_sum: int = Field(2, ge=0, le=4)  # p + q <= this
-    max_seasonal_pq_sum: int = Field(1, ge=0, le=2)  # P + Q <= this
+    max_seasonal_pq_sum: int = Field(1, ge=0, le=4)  # P + Q <= this
     selection_criterion: Literal["aic", "aicc", "bic"] = "aicc"
     max_iterations: int = Field(100, ge=10, le=2000)
     time_budget_seconds: float = Field(300.0, gt=0)
