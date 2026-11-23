@@ -99,7 +99,7 @@ Share results by exporting CSVs or copying a whole workspace directory; do not c
 ## Interpreting results
 
 * Metrics: MAE, MSE, RMSE, MAPE (percent). MAPE is **undefined** (stored as `NULL`, status
-  `UNDEFINED_NEAR_ZERO`) when any actual value is below 0.1 % of the mean absolute actual; it is excluded
+  `UNDEFINED_NEAR_ZERO`), when any actual value is below 0.1 % of the mean absolute actual; it is excluded
   from MAPE statistics and counted in `MAPE_n_undefined`.
 * `analyze` ranks methods separately per metric and group. Statistics use completed evaluations only;
   every row also reports `n_total / n_completed / n_failed`. `complete_coverage = False` means the comparison in
